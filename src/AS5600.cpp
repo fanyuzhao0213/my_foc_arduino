@@ -40,10 +40,16 @@ static uint16_t readTwoBytes(uint8_t in_adr_hi, uint8_t in_adr_lo) {
 }
 
 //----------------- 对外接口 -----------------
+bool AS5600_begin(uint8_t sda, uint8_t scl, uint32_t freq) {
+    Wire.begin(sda, scl, freq);
+    delay(100);
 
-void AS5600_begin(uint8_t sda, uint8_t scl, uint32_t freq) {
-    Wire.begin(sda, scl, freq); // 初始化 I2C
-    delay(500);
+    Wire.beginTransmission(0x36); // AS5600 默认 I2C 地址
+    if (Wire.endTransmission() != 0) {
+        Serial.println("AS5600 not detected!");
+        return false;
+    }
+    return true;
 }
 
 /**

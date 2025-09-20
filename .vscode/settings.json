@@ -3,6 +3,7 @@
     "files.associations": {
         "led.h": "c",
         "arduino.h": "c",
-        "functional": "cpp"
+        "functional": "cpp",
+        "pid.h": "c"
     }
 }

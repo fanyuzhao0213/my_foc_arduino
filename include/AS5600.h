@@ -14,7 +14,7 @@ extern "C" {
  * @param scl SCL 引脚
  * @param freq I2C 通信频率，默认 400kHz
  */
-void AS5600_begin(uint8_t sda, uint8_t scl, uint32_t freq);
+bool AS5600_begin(uint8_t sda, uint8_t scl, uint32_t freq);
 
 /**
  * @brief 获取原始 12 位角度值
