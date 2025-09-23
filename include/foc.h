@@ -2,52 +2,84 @@
 #define FOC_H
 
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "pid.h"
+#include "lowpass_filter.h"
 
 /**
- * @brief 初始化 PWM 和传感器
- * @param power_supply 电源电压（V）
+ * @brief 电机控制模式枚举
  */
-void DFOC_Vbus(float power_supply);
+typedef enum {
+    MOTOR_SPEED_LOOP,     ///< 单环速度控制
+    MOTOR_ANGLE_LOOP,     ///< 单环位置控制
+    MOTOR_DOUBLE_LOOP     ///< 双闭环位置控制（角度环+速度环）
+} MotorControlMode_t;
 
 /**
- * @brief 设置电机电流向量的 q 分量，从而控制转矩
- * @param Uq q 轴电压
- * @param angle_el 电角度
+ * @brief 电机FOC控制结构体
  */
-void setTorque(float Uq, float angle_el);
+typedef struct MotorFOC {
+    // ------------------- 硬件相关 -------------------
+    int pwm_pinA;          ///< 相A PWM引脚
+    int pwm_pinB;          ///< 相B PWM引脚
+    int pwm_pinC;          ///< 相C PWM引脚
+    int sda_pin;           ///< 编码器sda引脚
+    int scl_pin;           ///< 编码器scl引脚
+
+    int pole_pairs;        ///< 电机极对数
+    int direction;         ///< 电机旋转方向 1=正向 -1=反向
+    float voltage_supply;  ///< 直流母线电压 Vbus
+
+    // ------------------- 电压输出 -------------------
+    float Ualpha;          ///< α轴电压
+    float Ubeta;           ///< β轴电压
+    float Ua;              ///< 相A电压
+    float Ub;              ///< 相B电压
+    float Uc;              ///< 相C电压
+
+    // ------------------- 传感器零点 -------------------
+    float zero_electric_angle; ///< 电角度零点偏移
+
+    // ------------------- 目标量 -------------------
+    float target_angle;       ///< 目标角度 (rad)
+    float target_velocity;    ///< 目标速度 (rad/s)
+
+    // ------------------- 滤波器和PID -------------------
+    PIDController* pid_velocity; ///< 速度环PID
+    PIDController* pid_angle;    ///< 角度环PID
+    LowPassFilter* filter_velocity; ///< 速度滤波器
+    float filtered_velocity;       ///< 滤波后的速度
+
+    // ------------------- 控制模式 -------------------
+    MotorControlMode_t mode; ///< 控制模式
+
+    // ------------------- 计算速度的变量 -------------------
+    unsigned long now_time;         //当前时间
+    unsigned long last_time;        //上一次时间
+    float now_Velocity;             //当前速度
+    float last_Velocity;            //上一次速度
+    float last_angle;               //上一次角度
+
+    // ------------------- 成员函数指针 -------------------
+    void (*begin)(struct MotorFOC* motor);           ///< 初始化PWM和传感器
+    void (*alignSensor)(struct MotorFOC* motor);    ///< 归零校准
+    void (*update)(struct MotorFOC* motor);         ///< 主控制更新函数
+} MotorFOC_t;
 
 /**
- * @brief 将角度归一化到 [0, 2*PI]
- * @param angle 待归一化角度（弧度）
- * @return 归一化后的角度
+ * @brief 初始化电机FOC实例
  */
-float _normalizeAngle(float angle);
+void MotorFOC_Init(MotorFOC_t* motor,
+                   int pwmA, int pwmB, int pwmC,
+                   int sda, int scl,
+                   int polePairs, int dir,
+                   PIDController* velPID,
+                   PIDController* anglePID,
+                   LowPassFilter* velFilter,
+                   float voltage);
 
 /**
- * @brief 通过电机静止校准得到零电角度
- * @param _PP 极对数
- * @param _DIR 转向（1正向，-1反向）
+ * @brief 获取电机电角度
  */
-void DFOC_alignSensor(int _PP, int _DIR);
-
-/**
- * @brief 获取电机电角度（弧度）
- * @return 电角度
- */
-float _electricalAngle(void);
-
-/**
- * @brief 获取电机机械角度（弧度）
- * @return 机械角度
- */
-float DFOC_M0_Angle(void);
-
-#ifdef __cplusplus
-}
-#endif
+float MotorFOC_GetElectricalAngle(MotorFOC_t* motor);
 
 #endif

@@ -1,66 +1,72 @@
 #include "pid.h"
+#include <Arduino.h>  // 使用 micros() 获取时间戳
 
 /**
- * @brief 构造函数，初始化 PID 参数和中间变量
+ * @brief 初始化 PID 控制器
  */
-PIDController::PIDController(float P, float I, float D, float ramp, float limit)
-    : P(P)
-    , I(I)
-    , D(D)
-    , output_ramp(ramp)
-    , limit(limit)
-    , error_prev(0.0f)
-    , output_prev(0.0f)
-    , integral_prev(0.0f)
+void PID_Init(PIDController *pid, float P, float I, float D, float ramp, float limit)
 {
-    timestamp_prev = micros(); // 记录当前时间，单位：us
+    pid->P = P;
+    pid->I = I;
+    pid->D = D;
+    pid->output_ramp = ramp;
+    pid->limit = limit;
+
+    pid->error_prev = 0.0f;
+    pid->integral_prev = 0.0f;
+    pid->output_prev = 0.0f;
+    pid->timestamp_prev = micros(); // 记录当前时间戳
 }
 
 /**
  * @brief PID 控制计算
+ *
+ * 使用 **Tustin 积分法** 处理积分项，避免传统矩形积分带来的精度问题。
  */
-float PIDController::operator()(float error) {
+float PID_Update(PIDController *pid, float error)
+{
     // ---------- 1. 计算时间间隔 ----------
-    unsigned long timestamp_now = micros();
-    float Ts = (timestamp_now - timestamp_prev) * 1e-6f; // us → s
-    if (Ts <= 0 || Ts > 0.5f) {
-        Ts = 1e-3f; // 防止计算异常，默认采样周期 1ms
+    uint32_t timestamp_now = micros();
+    float Ts = (timestamp_now - pid->timestamp_prev) * 1e-6f; // 转换为秒
+
+    // 防止计算异常：如果时间间隔过小或过大，使用默认采样周期 1ms
+    if (Ts <= 0.0f || Ts > 0.5f) {
+        Ts = 1e-3f;
     }
 
     // ---------- 2. P 环 ----------
-    float proportional = P * error;
+    float proportional = pid->P * error;
 
-    // ---------- 3. I 环（积分） ----------
-    // 使用 **Tustin 积分**（梯形法）提高精度
-    float integral = integral_prev + I * Ts * 0.5f * (error + error_prev);
+    // ---------- 3. I 环（Tustin 积分法） ----------
+    float integral = pid->integral_prev + pid->I * Ts * 0.5f * (error + pid->error_prev);
 
-    // 对积分项限幅，避免积分饱和（windup）
-    integral = _constrain(integral, -limit, limit);
+    // 对积分项进行限幅，防止积分饱和
+    integral = PID_Constrain(integral, -pid->limit, pid->limit);
 
-    // ---------- 4. D 环（微分） ----------
-    float derivative = D * (error - error_prev) / Ts;
+    // ---------- 4. D 环 ----------
+    float derivative = pid->D * (error - pid->error_prev) / Ts;
 
-    // ---------- 5. PID 三项求和 ----------
+    // ---------- 5. PID 输出计算 ----------
     float output = proportional + integral + derivative;
 
     // 输出限幅
-    output = _constrain(output, -limit, limit);
+    output = PID_Constrain(output, -pid->limit, pid->limit);
 
-    // ---------- 6. 输出变化速率限幅 ----------
-    if (output_ramp > 0) {
-        float output_rate = (output - output_prev) / Ts;
-        if (output_rate > output_ramp) {
-            output = output_prev + output_ramp * Ts;
-        } else if (output_rate < -output_ramp) {
-            output = output_prev - output_ramp * Ts;
+    // ---------- 6. 输出变化速率限制 ----------
+    if (pid->output_ramp > 0.0f) {
+        float output_rate = (output - pid->output_prev) / Ts;
+        if (output_rate > pid->output_ramp) {
+            output = pid->output_prev + pid->output_ramp * Ts;
+        } else if (output_rate < -pid->output_ramp) {
+            output = pid->output_prev - pid->output_ramp * Ts;
         }
     }
 
     // ---------- 7. 保存状态 ----------
-    integral_prev = integral;       // 保存积分值
-    output_prev = output;           // 保存输出
-    error_prev = error;             // 保存误差
-    timestamp_prev = timestamp_now; // 保存时间戳
+    pid->integral_prev = integral;
+    pid->output_prev = output;
+    pid->error_prev = error;
+    pid->timestamp_prev = timestamp_now;
 
     return output;
 }
@@ -68,9 +74,10 @@ float PIDController::operator()(float error) {
 /**
  * @brief 重置 PID 控制器状态
  */
-void PIDController::reset() {
-    error_prev = 0.0f;
-    output_prev = 0.0f;
-    integral_prev = 0.0f;
-    timestamp_prev = micros();
+void PID_Reset(PIDController *pid)
+{
+    pid->error_prev = 0.0f;
+    pid->integral_prev = 0.0f;
+    pid->output_prev = 0.0f;
+    pid->timestamp_prev = micros();
 }

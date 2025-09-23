@@ -74,9 +74,17 @@ float AS5600_getAngle(void) {
     float val = AS5600_getAngleSingle();
     float d_angle = val - angle_prev;
 
-    // 判断是否发生跨越整圈
-    if (fabs(d_angle) > (0.8f * 2.0f * PI)) {
-        full_rotations += (d_angle > 0) ? -1 : 1;
+    /*
+    每次采样的角度变化不会超过 180°
+    也就是说，如果你采样频率足够高，电机每次旋转的角度变化小于 π（180°），就可以正确判断方向
+    提高采样率
+    如果采样太慢，电机速度快，可能一次变化超过 π，这时就会出错
+    */
+    // 判断是否跨零点
+    if (d_angle > PI) {          // 逆向跨越 0
+        full_rotations -= 1;
+    } else if (d_angle < -PI) {  // 正向跨越 0
+        full_rotations += 1;
     }
 
     angle_prev = val;

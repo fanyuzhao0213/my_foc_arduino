@@ -1,63 +1,73 @@
 #include <Arduino.h>
-#include "led.h"
-#include "serial.h"
-#include "as5600.h"
 #include "foc.h"
+#include "pid.h"
+#include "lowpass_filter.h"
+#include "serial.h"
 
+// ==================== 共享PID和低通滤波器 ====================
+// 速度环PID
+PIDController sharedVelPID = {
+    2.0f,      // P
+    0.1f,      // I
+    0.0f,      // D
+    10000.0f,  // 输出斜率限制
+    6.0f       // 电压输出限制
+};
 
-#define LED_PIN       22
+// 角度环PID
+PIDController sharedAnglePID = {
+    2.0f,      // P
+    0.0f,      // I
+    0.0f,      // D
+    10000.0f,  // 输出斜率限制
+    100.0f     // 速度输出限制
+};
 
-int Sensor_DIR=-1;    //传感器方向
-int Motor_PP=7;    //电机极对数
+// 速度低通滤波器
+LowPassFilter sharedFilter;
+
+// ==================== 电机实例 ====================
+MotorFOC_t motor0;  // 电机0
+MotorFOC_t motor1;  // 电机1
 
 void setup() {
-    serial_init(115200); // 初始化串口
+    Serial.begin(115200);  // 初始化串口打印
 
-    led_init(LED_PIN);   // 初始化 LED
-    led_on();            // 点亮 LED
+    // 初始化低通滤波器
+    LowPassFilter_Init(&sharedFilter, 0.01f);  // Tf = 10ms
 
-    DFOC_Vbus(12.0);   //设定驱动器供电电压
-    DFOC_alignSensor(Motor_PP, Sensor_DIR);
+    // -------------------- 初始化电机 --------------------
+    // 参数: 电机实例, PWM引脚A/B/C, 编码器IIC引脚,极对数, 方向, 速度PID, 角度PID, 滤波器, 供电电压
+    MotorFOC_Init(&motor0, 32,33,25,19,18, 7,1, &sharedVelPID, &sharedAnglePID, &sharedFilter, 12.0f);
+    MotorFOC_Init(&motor1, 26,27,14,23,5, 7,-1, &sharedVelPID, &sharedAnglePID, &sharedFilter, 12.0f);
+
+    // -------------------- 硬件初始化 --------------------
+    motor0.begin(&motor0);   // 初始化PWM和传感器
+    motor1.begin(&motor1);
+
+    // -------------------- 零点校准 --------------------
+    motor0.alignSensor(&motor0);  // 电机0归零
+    motor1.alignSensor(&motor1);  // 电机1归零
+
+    // -------------------- 设置控制模式 --------------------
+    motor0.mode = MOTOR_DOUBLE_LOOP; // 电机0使用双闭环（角度+速度）
+    motor1.mode = MOTOR_SPEED_LOOP;  // 电机1使用单环速度
 }
 
 void loop() {
-    static uint8_t A=80;
-    static uint8_t B=50;
-    static uint8_t C=20;
-    // led_toggle();        // 每次循环 LED 状态切换
-    // delay(1000);         // 1 秒闪烁一次
-    #if 0
-    // PWM 占空比循环
-    for (int duty = 0; duty <= 255; duty += 5) {
-        pwm_set_duty(channel1, duty);
-        pwm_set_duty(channel2, duty);
-        pwm_set_duty(channel3, duty);
-        delay(20);
+    // ==================== 更新电机控制 ====================
+    motor0.update(&motor0);  // 电机0 PID计算并输出PWM
+    motor1.update(&motor1);  // 电机1 PID计算并输出PWM
+
+    // ==================== 串口动态调节 ====================
+    // 非阻塞串口读取数字
+    if (serial_process()) {  // serial_process() 返回 true 表示接收到有效命令
+        float motor_target = serial_getMotorTarget(); // 获取串口输入的目标值
+        Serial.print("串口目标：");
+        Serial.println(motor_target);
+        // 可根据需要写入 motor0.target_angle 或 motor0.target_velocity
+        // 例如: motor0.target_angle = motor_target;
     }
-    #endif
-    #if 0
-    // 非阻塞接收数字
-    if (serial_process()) {
-        float target = serial_getMotorTarget();
-        // TODO: 将 target 用于电机控制
-        Serial.print("Do something with target: ");
-        Serial.println(target);
 
-        // 示例：根据目标角度设置电机转矩
-        setTorque(target, 0);
-    }
-    #endif
-
-    //输出角度值
-    float Kp=0.133;
-    float Sensor_Angle=DFOC_M0_Angle();
-    setTorque(Kp*(serial_getMotorTarget()-Sensor_DIR*Sensor_Angle)*180/PI,_electricalAngle());   //位置闭环
-    //setTorque(serial_motor_target(),_electricalAngle());   //电压力矩
-
-    A= (A+1)%100;
-    B= (B+1)%100;
-    C= (C+1)%100;
-    Serial.printf("<demo>: %d,%d,%d\n",A,B,C);
-    delay(100);
+    delay(10);  // 10ms循环，非阻塞控制
 }
-

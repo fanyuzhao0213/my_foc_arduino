@@ -1,4 +1,5 @@
 #include "lowpass_filter.h"
+#include <Arduino.h>  // 使用 micros() 获取时间戳
 
 /**
  * @brief 初始化低通滤波器

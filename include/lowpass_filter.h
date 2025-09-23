@@ -31,10 +31,4 @@ void LowPassFilter_Init(LowPassFilter *filter, float time_constant);
  */
 float LowPassFilter_Update(LowPassFilter *filter, float x);
 
-/**
- * @brief 获取当前时间，单位：us
- * @note 需要用户自己实现，比如使用 MCU 的定时器
- */
-uint32_t micros(void);
-
 #endif // LOWPASS_FILTER_H

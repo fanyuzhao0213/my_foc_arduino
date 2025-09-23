@@ -23,7 +23,6 @@ bool serial_process(void) {
 
     while (Serial.available()) {
         char inChar = (char)Serial.read();
-
         // 判断结束符或缓冲区满
         if (inChar == '\n' || buf_index >= SERIAL_BUFFER_SIZE - 1) {
             buffer[buf_index] = '\0'; // 字符串结束
@@ -33,14 +32,12 @@ bool serial_process(void) {
             motor_target = atof(buffer);
             Serial.print("Received target: ");
             Serial.println(motor_target);
-
             newData = true;           // 标记收到新命令
         }
         else if (inChar != '\r') {    // 忽略回车
             buffer[buf_index++] = inChar;
         }
     }
-
     return newData;
 }
 
