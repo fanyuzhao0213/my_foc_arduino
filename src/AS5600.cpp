@@ -1,92 +1,119 @@
-#include "as5600.h"
-
-//----------------- 内部变量 -----------------
-static const uint8_t _ams5600_Address = 0x36; // I2C 地址
-static const uint8_t _raw_ang_hi = 0x0C;
-static const uint8_t _raw_ang_lo = 0x0D;
-
-static int32_t full_rotations = 0; // 总旋转圈数
-static float angle_prev = 0;       // 上一次角度值
-
-//----------------- 内部函数 -----------------
-
 /**
- * @brief 从 AS5600 读取两个字节数据
- * @param in_adr_hi 高字节地址
- * @param in_adr_lo 低字节地址
- * @return 合并后的16位值
+ * @file AS5600.c
+ * @brief AS5600 角度传感器驱动实现
  */
-static uint16_t readTwoBytes(uint8_t in_adr_hi, uint8_t in_adr_lo) {
-    uint16_t retVal = 0;
 
-    // 读取低字节
-    Wire.beginTransmission(_ams5600_Address);
-    Wire.write(in_adr_lo);
+#include "AS5600.h"
+
+/* ===================== 初始化 ===================== */
+void AS5600_Init(AS5600_Handle_t *handle, uint8_t sda, uint8_t scl, uint32_t freq, uint8_t address)
+{
+    handle->i2c_sda_pin = sda;
+    handle->i2c_scl_pin = scl;
+    handle->i2c_frequency = freq;
+    handle->i2c_address = address;
+    handle->full_rotations = 0;
+    handle->angle_prev = 0.0f;
+
+    Wire.begin(handle->i2c_sda_pin, handle->i2c_scl_pin, handle->i2c_frequency);
+    delay(100);  // 确保设备上电稳定
+}
+
+/* ===================== 读取高低字节 ===================== */
+uint16_t AS5600_ReadTwoBytes(AS5600_Handle_t *handle, uint8_t reg_hi, uint8_t reg_lo)
+{
+    uint8_t high = 0, low = 0;
+
+    // 低字节
+    Wire.beginTransmission(handle->i2c_address);
+    Wire.write(reg_lo);
     Wire.endTransmission();
-    Wire.requestFrom(_ams5600_Address, (uint8_t)1);
-    while(Wire.available() == 0);
-    uint8_t low = Wire.read();
+    Wire.requestFrom(handle->i2c_address, (uint8_t)1);
+    while (Wire.available() == 0);
+    low = Wire.read();
 
-    // 读取高字节
-    Wire.beginTransmission(_ams5600_Address);
-    Wire.write(in_adr_hi);
+    // 高字节
+    Wire.beginTransmission(handle->i2c_address);
+    Wire.write(reg_hi);
     Wire.endTransmission();
-    Wire.requestFrom(_ams5600_Address, (uint8_t)1);
-    while(Wire.available() == 0);
-    uint8_t high = Wire.read();
+    Wire.requestFrom(handle->i2c_address, (uint8_t)1);
+    while (Wire.available() == 0);
+    high = Wire.read();
 
-    retVal = ((uint16_t)high << 8) | low;
-    return retVal;
+    return ((uint16_t)high << 8) | low;
 }
 
-//----------------- 对外接口 -----------------
-bool AS5600_begin(uint8_t sda, uint8_t scl, uint32_t freq) {
-    Wire.begin(sda, scl, freq);
-    delay(100);
-
-    Wire.beginTransmission(0x36); // AS5600 默认 I2C 地址
-    if (Wire.endTransmission() != 0) {
-        Serial.println("AS5600 not detected!");
-        return false;
-    }
-    return true;
+/* ===================== 获取原始角度 ===================== */
+uint16_t AS5600_GetRawAngle(AS5600_Handle_t *handle)
+{
+    return AS5600_ReadTwoBytes(handle, AS5600_RAW_ANGLE_HI_REG, AS5600_RAW_ANGLE_LO_REG);
 }
 
-/**
- * @brief 获取原始 12 位角度值
- */
-uint16_t AS5600_getRawAngle(void) {
-    return readTwoBytes(_raw_ang_hi, _raw_ang_lo);
+/* ===================== 获取角度 (0~2π) ===================== */
+float AS5600_GetAngleWithoutTrack(AS5600_Handle_t *handle)
+{
+    return (float)AS5600_GetRawAngle(handle) * AS5600_RADIAN_PER_BIT;
 }
 
-/**
- * @brief 获取单圈角度（弧度制），不考虑旋转圈数
- */
-float AS5600_getAngleSingle(void) {
-    uint16_t raw = AS5600_getRawAngle();
-    return ((float)raw * 0.08789f * PI / 180.0f); // 转弧度
-}
+/* ===================== 获取累计角度 ===================== */
+float AS5600_GetAngle(AS5600_Handle_t *handle)
+{
+    float current_angle = AS5600_GetAngleWithoutTrack(handle);
+    float delta_angle = current_angle - handle->angle_prev;
 
-/**
- * @brief 获取总角度（弧度制），累加旋转圈数
- */
-float AS5600_getAngle(void) {
-    float val = AS5600_getAngleSingle();
-    float d_angle = val - angle_prev;
-
-    /*
-    每次采样的角度变化不会超过 180°
-    也就是说，如果你采样频率足够高，电机每次旋转的角度变化小于 π（180°），就可以正确判断方向
-    提高采样率
-    如果采样太慢，电机速度快，可能一次变化超过 π，这时就会出错
-    */
-    // 判断是否跨零点
-    if (d_angle > PI) {          // 逆向跨越 0
-        full_rotations -= 1;
-    } else if (d_angle < -PI) {  // 正向跨越 0
-        full_rotations += 1;
+    if (fabs(delta_angle) > (0.5f * AS5600_2PI)) {
+        handle->full_rotations += (delta_angle > 0.0f) ? -1 : 1;
     }
 
-    angle_prev = val;
-    return (float)full_rotations * 2.0f * PI + angle_prev;
+    handle->angle_prev = current_angle;
+
+    return (float)handle->full_rotations * AS5600_2PI + current_angle;
+}
+
+/**
+ * @brief 获取电机角速度（弧度/秒）
+ *
+ * 基于累计旋转圈数和上一次采样角度计算瞬时角速度。
+ * @param handle AS5600 句柄
+ * @return 角速度 (rad/s)
+ */
+float AS5600_GetVelocity(AS5600_Handle_t *handle)
+{
+    // 获取当前时间（微秒）
+    uint32_t current_ts = micros();
+    // 获取当前累计角度（弧度）
+    float current_angle = AS5600_GetAngle(handle);
+
+    // 计算时间间隔（秒）
+    float dt = (float)(current_ts - handle->vel_angle_prev_ts) * 1e-6f;
+    if (dt <= 0.0f) dt = 1e-3f;  // 避免时间异常导致除零
+    if (dt >= 0.05f) dt = 0.05;  // 避免时间异常导致除零
+
+    // 计算角度变化（弧度），考虑跨圈情况
+    float d_angle = (float)(handle->full_rotations - handle->vel_full_rotations) * AS5600_2PI
+                    + (current_angle - handle->vel_angle_prev);
+
+    // 计算角速度
+    float velocity = d_angle / dt;
+
+    // 保存当前状态用于下次速度计算
+    handle->vel_full_rotations = handle->full_rotations;
+    handle->vel_angle_prev = current_angle;
+    handle->vel_angle_prev_ts = current_ts;
+
+    return velocity;
+}
+
+
+/* ===================== 测试函数 ===================== */
+void AS5600_Test(AS5600_Handle_t *handle)
+{
+    Serial.println("===== AS5600 测试 =====");
+    Serial.print("原始角度 (0-4095): ");
+    Serial.println(AS5600_GetRawAngle(handle));
+    Serial.print("角度 (0~2PI, rad): ");
+    Serial.println(AS5600_GetAngleWithoutTrack(handle), 4);
+    Serial.print("累计旋转角度 (rad): ");
+    Serial.println(AS5600_GetAngle(handle), 4);
+    Serial.println("=========================");
 }
