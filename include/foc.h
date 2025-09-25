@@ -65,7 +65,10 @@ float FOC_GetMechanicalAngle(void);
  */
 float FOC_SerialReceiveTarget(void);
 
-
+/**
+ * @brief 计算q轴电流
+ */
+float FOC_calc_Iq(float current_a, float current_b, float angle_el);
 
 float _normalizeAngle(float angle);
 

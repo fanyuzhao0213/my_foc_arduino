@@ -5,18 +5,29 @@
 #include "AS5600.h"
 #include "pid.h"
 #include "lowpass_filter.h"
+#include "Current_Sensor.h"
+
 
 /* 定义 AS5600 句柄 */
 AS5600_Handle_t M0_as5600_handle;
 /* 定义 PID 句柄 */
 PIDController M0_speed_pid_controller;
 PIDController M0_angle_pid_controller;
+PIDController M0_current_pid_controller;
 /* 定义 低通滤波 句柄 */
 LowPassFilter M0_speed_lowpass_filter;
+LowPassFilter M0_Iqcurrent_lowpass_filter;
+/* 定义 电流传感器 句柄*/
+CurrSense_t M0_current_value;
 
 /* ===================== 全局变量 ===================== */
 static FOC_Handle_t g_foc_handle;
 static float g_motor_target = 0;
+
+float g_M0_Velocity = 0;
+float g_M0_Angle = 0;
+float g_M0_Current = 0;
+float g_M0_Iq_Current = 0;
 
 /* ===================== PWM 初始化 ===================== */
 void FOC_Init(FOC_Handle_t *handle, float voltage)
@@ -48,9 +59,15 @@ void FOC_Init(FOC_Handle_t *handle, float voltage)
     /* 初始化PID 角度环和速度环*/
     PID_Init(&M0_speed_pid_controller, 2, 0, 0, 100000, voltage/2);
     PID_Init(&M0_angle_pid_controller, 2, 0, 0, 100000, 100);
+    PID_Init(&M0_current_pid_controller, 5, 200, 0, 100000, 1);
+
 
     /* 初始化低通滤波器 */
     LowPassFilter_Init(&M0_speed_lowpass_filter, 0.05f);
+    LowPassFilter_Init(&M0_Iqcurrent_lowpass_filter, 0.05f);
+
+    /* 初始化电流传感器 */
+    CurrSense_Init(&M0_current_value, 0);
 }
 
 /* ===================== 设置三相 PWM ===================== */
@@ -168,6 +185,12 @@ float FOC_M0_ANGLE_PID_UPDATE(float error)
     return PID_Update(&M0_angle_pid_controller, error);
 }
 
+//M0角度PID更新接口
+float FOC_M0_CURRENT_PID_UPDATE(float error)
+{
+    return PID_Update(&M0_current_pid_controller, error);
+}
+
 /* ===================== 低通滤波 =====================*/
 //无滤波
 //float FOC_M0_GetVelocity()
@@ -184,6 +207,52 @@ float FOC_M0_GetVelocity()
     return M0_SpeedFilter;   //考虑方向
 }
 
+//Iq接口滤波
+float FOC_M0_GetIqCurrent()
+{
+    /* 计算Iq */
+    g_M0_Iq_Current = FOC_calc_Iq(M0_current_value.current_a, M0_current_value.current_b, FOC_ElectricalAngle(&g_foc_handle));
+    //滤波
+    g_M0_Iq_Current = LowPassFilter_Update(&M0_Iqcurrent_lowpass_filter, g_M0_Iq_Current);
+    return g_M0_Iq_Current;   //考虑方向
+}
+
+
+/* ===================== 电流值换算到Iq,Id =====================*/
+#define _1_SQRT3 0.57735026919f    // 1/√3
+#define _2_SQRT3 1.15470053838f    // 2/√3
+
+/**
+ * @brief 计算 q 轴电流 I_q
+ * @param current_a    三相电流 A 相
+ * @param current_b    三相电流 B 相
+ * @param angle_el     电角度（弧度）
+ * @return float       I_q 电流分量（扭矩电流）
+ */
+float FOC_calc_Iq(float current_a, float current_b, float angle_el)
+{
+    // ========== Step 1. Clarke 变换（abc -> αβ） ==========
+    // 三相电流映射到两相静止坐标系 (α, β)
+    // 数学公式：
+    // I_alpha = I_a
+    // I_beta  = (I_a + 2 * I_b) / √3
+    float I_alpha = current_a;
+    float I_beta  = _1_SQRT3 * current_a + _2_SQRT3 * current_b;
+
+    // ========== Step 2. Park 变换（αβ -> dq） ==========
+    // 将 αβ 坐标系旋转到转子磁场坐标系 (d, q)
+    // 数学公式：
+    // I_d =  I_alpha * cos(θe) + I_beta * sin(θe)
+    // I_q =  I_beta  * cos(θe) - I_alpha * sin(θe)
+    float ct = cosf(angle_el);
+    float st = sinf(angle_el);
+    // float I_d = I_alpha * ct + I_beta * st; // 磁场分量（这里未使用）
+    float I_q = I_beta * ct - I_alpha * st;   // 扭矩分量
+
+    return I_q;
+}
+
+
 /* ===================== 辅助函数 ===================== */
 /*
     角度归一化函数，它的作用是将任意弧度角归一化到 [0, 2π) 的范围内
@@ -198,7 +267,15 @@ float _normalizeAngle(float angle)
     return a >= 0 ? a : (a + 2 * PI);
 }
 
-
+void FOC_M0_Get_Velocity_Current(void)
+{
+    // 获取电机当前电角度（弧度）
+    float electrical_angle = FOC_ElectricalAngle(&g_foc_handle);
+    // 获取电机当前速度（弧度/秒，低通滤波）
+    float velocity = FOC_M0_GetVelocity();
+    // 获取电机当前电流（弧度/秒，低通滤波）
+    CurrSense_ReadCurrents(&M0_current_value);
+}
 
 /* =====  测试函数  ====*/
 /*  1️⃣ 角度闭环 + 速度闭环（Position + Velocity Loop） */
@@ -206,7 +283,6 @@ void DFOC_M0_Set_Velocity_Angle(float target_angle_rad)
 {
     //设置速度环PID
     //FOC_M0_SET_VEL_PID(0.005,0.00,0,0);
-
 
     // 当前机械角度（弧度）
     float current_angle = FOC_GetMechanicalAngle();
@@ -252,4 +328,11 @@ void DFOC_M0_SetTorque(float torque)
 {
     // 直接输出电压/力矩
     FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));
+}
+
+
+/*4️⃣ 开环力矩 / 电流输出（Torque Control）*/
+void DFOC_M0_setTorque(float Target)
+{
+    FOC_SetTorque(&g_foc_handle, FOC_M0_CURRENT_PID_UPDATE(Target-FOC_M0_GetIqCurrent()), FOC_ElectricalAngle(&g_foc_handle));
 }

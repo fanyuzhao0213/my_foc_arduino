@@ -31,7 +31,6 @@ typedef struct {
     float current_a; // 实时电流
     float current_b;
     float current_c;
-
 } CurrSense_t;
 
 // ------------------------- 函数声明 -------------------------

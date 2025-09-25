@@ -1,5 +1,12 @@
 #include "serial.h"
 
+/*
+函数	            是否换行	              是否格式化输出	            主要用途
+Serial.print()	    ❌ 不换行	            ✅ 有（进制/小数）	        常规调试输出
+Serial.println()	✅ 自动换行	            ✅ 有	                    打印一整行信息
+Serial.printf()	    ❌ 自定义	            ✅ 完整                      C 风格格式化	复杂调试输出
+Serial.write()	    ❌ 不换行	            ❌ 原始字节流	            发送二进制数据
+*/
 //----------------- 内部变量 -----------------
 #define SERIAL_BUFFER_SIZE 64
 static char buffer[SERIAL_BUFFER_SIZE]; // 存放接收数据
@@ -7,7 +14,6 @@ static uint8_t buf_index = 0;           // 当前写入位置
 static float motor_target = 0.0f;       // 最新解析的电机目标
 
 //----------------- 对外接口 -----------------
-
 void serial_init(uint32_t baudrate) {
     Serial.begin(baudrate);
     while (!Serial); // 等待串口就绪

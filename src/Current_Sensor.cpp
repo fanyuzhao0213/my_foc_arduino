@@ -1,6 +1,6 @@
 #include "Current_Sensor.h"
 #include <Arduino.h>
-
+#include "serial.h"
 
 // ------------------------- 初始化函数 -------------------------
 void CurrSense_Init(CurrSense_t* cs, int motorNum) {
@@ -75,6 +75,8 @@ void CurrSense_Calibrate(CurrSense_t* cs) {
     cs->offset_a = sum_a / rounds;
     cs->offset_b = sum_b / rounds;
     if (IS_SET(cs->pinC)) cs->offset_c = sum_c / rounds;
+
+    Serial.printf("Current Sensor Calibrated,cs->offset_a:%d cs->offset_b:%d\n",cs->offset_a,cs->offset_b);
 }
 
 // ------------------------- 读取 ADC 电压 -------------------------
