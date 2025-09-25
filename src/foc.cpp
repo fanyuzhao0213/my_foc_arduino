@@ -8,6 +8,8 @@
 #include "Current_Sensor.h"
 
 
+my_foc_motorParmTypdef my_foc_motorParm = {0.0};
+
 /* 定义 AS5600 句柄 */
 AS5600_Handle_t M0_as5600_handle;
 /* 定义 PID 句柄 */
@@ -158,21 +160,32 @@ float FOC_SerialReceiveTarget(void)
 /**/
 //=================PID 设置函数=================
 //速度PID
-void FOC_M0_SET_VEL_PID(float P,float I,float D,float ramp)   //M0角度环PID设置
+void FOC_M0_SET_VEL_PID(float P,float I,float D,float ramp,float limit)   //M0角度环PID设置
 {
   M0_speed_pid_controller.P=P;
   M0_speed_pid_controller.I=I;
   M0_speed_pid_controller.D=D;
   M0_speed_pid_controller.output_ramp=ramp;
+  M0_speed_pid_controller.limit=limit;
 }
 //角度PID
-void FOC_M0_SET_ANGLE_PID(float P,float I,float D,float ramp)   //M0角度环PID设置
+void FOC_M0_SET_ANGLE_PID(float P,float I,float D,float ramp,float limit)   //M0角度环PID设置
 {
   M0_angle_pid_controller.P=P;
   M0_angle_pid_controller.I=I;
   M0_angle_pid_controller.D=D;
   M0_angle_pid_controller.output_ramp=ramp;
+  M0_angle_pid_controller.limit=limit;
 }
+//电流PID
+void FOC_M0_SET_CURRENT_PID(float P,float I,float D,float ramp) //M0电流环PID设置
+{
+  M0_current_pid_controller.P=P;
+  M0_current_pid_controller.I=I;
+  M0_current_pid_controller.D=D;
+  M0_current_pid_controller.output_ramp=ramp;
+}
+
 
 //M0速度PID更新接口
 float FOC_M0_VEL_PID_UPDATE(float error)   //M0速度环
@@ -185,7 +198,7 @@ float FOC_M0_ANGLE_PID_UPDATE(float error)
     return PID_Update(&M0_angle_pid_controller, error);
 }
 
-//M0角度PID更新接口
+//M0电流PID更新接口
 float FOC_M0_CURRENT_PID_UPDATE(float error)
 {
     return PID_Update(&M0_current_pid_controller, error);
@@ -267,14 +280,27 @@ float _normalizeAngle(float angle)
     return a >= 0 ? a : (a + 2 * PI);
 }
 
-void FOC_M0_Get_Velocity_Current(void)
+/**
+ * @brief 获取M0电机的速度、角度和电流信息
+ *
+ * 该函数用于同步获取FOC控制所需的三个关键参数：
+ * 1. 电机当前的电角度（用于坐标变换）
+ * 2. 电机当前的转速（用于速度环控制）
+ * 3. 电机当前的相电流（用于电流环控制）
+ *
+ * 这些参数将用于FOC算法的闭环控制计算
+ */
+void FOC_M0_Get_Angle_Velocity_Current(void)
 {
-    // 获取电机当前电角度（弧度）
-    float electrical_angle = FOC_ElectricalAngle(&g_foc_handle);
-    // 获取电机当前速度（弧度/秒，低通滤波）
-    float velocity = FOC_M0_GetVelocity();
-    // 获取电机当前电流（弧度/秒，低通滤波）
+    // 获取电机当前角度（单位：弧度）
+    my_foc_motorParm.M0_motor_angle = FOC_GetMechanicalAngle();
+    // 获取电机当前速度（单位：弧度/秒）
+    // 经过低通滤波处理，消除噪声，提供平滑的速度反馈
+    my_foc_motorParm.M0_motor_velocity = FOC_M0_GetVelocity();
+    // 读取电机当前相电流（单位：安培）
+    // 通过电流传感器获取实时的U、V相电流，用于电流闭环控制
     CurrSense_ReadCurrents(&M0_current_value);
+    my_foc_motorParm.M0_motor_current =  FOC_M0_GetIqCurrent();
 }
 
 /* =====  测试函数  ====*/
@@ -295,7 +321,11 @@ void DFOC_M0_Set_Velocity_Angle(float target_angle_rad)
     // 速度误差，速度PID输出电压/力矩
     float torque = FOC_M0_VEL_PID_UPDATE(target_velocity - current_velocity);
     // 输出到电机
-    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));
+    #if USE_VOLTAGE_CONTROL
+    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));           //电压直接作用到电机
+    #else
+    DFOC_M0_setTorque(torque);                                                          //电流环来控制力矩
+    #endif
 }
 
 /*2️⃣ 速度闭环（Velocity Loop）*/
@@ -306,7 +336,11 @@ void DFOC_M0_SetVelocity(float target_velocity_rad_s)
     // 速度误差，速度PID输出电压/力矩
     float torque = FOC_M0_VEL_PID_UPDATE(target_velocity_rad_s - current_velocity);
     // 输出到电机
-    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));
+    #if USE_VOLTAGE_CONTROL
+    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));           //电压直接作用到电机
+    #else
+    DFOC_M0_setTorque(torque);                                                          //电流环来控制力矩
+    #endif
 }
 
 
@@ -320,14 +354,22 @@ void DFOC_M0_Set_Force_Angle(float target_angle_rad)
     // 角度PID输出电压/力矩
     float torque = FOC_M0_ANGLE_PID_UPDATE(angle_error);
     // 输出到电机
-    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));
+    #if USE_VOLTAGE_CONTROL
+    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));           //电压直接作用到电机
+    #else
+    DFOC_M0_setTorque(torque);                                                          //电流环来控制力矩
+    #endif
 }
 
 /*4️⃣ 开环力矩 / 电压输出（Torque Control）*/
-void DFOC_M0_SetTorque(float torque)
+void DFOC_M0_SetTorqueVoltage(float torque)
 {
     // 直接输出电压/力矩
-    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));
+    #if USE_VOLTAGE_CONTROL
+    FOC_SetTorque(&g_foc_handle, torque, FOC_ElectricalAngle(&g_foc_handle));           //电压直接作用到电机
+    #else
+    DFOC_M0_setTorque(torque);                                                          //电流环来控制力矩
+    #endif
 }
 
 

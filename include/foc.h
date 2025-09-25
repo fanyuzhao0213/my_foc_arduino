@@ -5,6 +5,11 @@
 #include "AS5600.h"
 
 /* ===================== 宏定义 ===================== */
+
+/* 宏定义使用电压还是电流控制*/
+#define USE_VOLTAGE_CONTROL             1
+
+
 #define FOC_CONSTRAIN(val, low, high) ((val)<(low)?(low):((val)>(high)?(high):(val)))
 #define FOC_3PI_2  4.71238898038f    // 3*pi/2
 #define FOC_PWM_RESOLUTION 8           // 8位精度
@@ -25,9 +30,19 @@ typedef struct {
     uint8_t pwmB_pin;          // PWM B相引脚
     uint8_t pwmC_pin;          // PWM C相引脚
 } FOC_Handle_t;
-
 /* ===================== 外部接口函数 ===================== */
 
+
+typedef struct {
+
+    float M0_motor_angle;       // 当前机械角度（弧度）
+    float M0_motor_velocity;    // 当前速度 rad/s
+    float M0_motor_current;     //当前输出的iq力矩
+    float M1_motor_angle;       // 当前机械角度（弧度）
+    float M1_motor_velocity;    // 当前速度 rad/s
+    float M1_motor_current;     //当前输出的iq力矩
+} my_foc_motorParmTypdef;
+extern my_foc_motorParmTypdef my_foc_motorParm;
 /**
  * @brief 初始化 FOC 句柄及 PWM
  * @param handle FOC 句柄
@@ -72,13 +87,25 @@ float FOC_calc_Iq(float current_a, float current_b, float angle_el);
 
 float _normalizeAngle(float angle);
 
+void FOC_M0_Get_Angle_Velocity_Current(void);
+
 /*PID封装电机相关函数*/
-//速度PID设定
-void FOC_M0_SET_VEL_PID(float P,float I,float D,float ramp);
-//角度PID设定
-void FOC_M0_SET_ANGLE_PID(float P,float I,float D,float ramp);
-//M0速度PID接口
-float FOC_M0_VEL_PID_UPDATE(float error);
-//M0角度PID接口
-float FOC_M0_ANGLE_PID_UPDATE(float error);
+
+void FOC_M0_SET_VEL_PID(float P,float I,float D,float ramp,float limit);//速度PID设定
+void FOC_M0_SET_ANGLE_PID(float P,float I,float D,float ramp,float limit);//角度PID设定
+void FOC_M0_SET_CURRENT_PID(float P,float I,float D,float ramp); //M0电流环PID设置
+float FOC_M0_VEL_PID_UPDATE(float error);//M0速度PID接口
+float FOC_M0_ANGLE_PID_UPDATE(float error);//M0角度PID接口
+float FOC_M0_CURRENT_PID_UPDATE(float error);
+
+/*角度闭环 + 速度闭环（Position + Velocity Loop） */
+void DFOC_M0_Set_Velocity_Angle(float target_angle_rad);
+/*速度闭环（Velocity Loop）*/
+void DFOC_M0_SetVelocity(float target_velocity_rad_s);
+/*角度闭环 / 力位控制（Position / Force-Angle Loop）*/
+void DFOC_M0_Set_Force_Angle(float target_angle_rad);
+/*开环力矩 / 电压输出（Torque Control）*/
+void DFOC_M0_SetTorqueVoltage(float torque);
+/*开环力矩 / 电流输出（Torque Control）*/
+void DFOC_M0_setTorque(float Target);
 #endif
